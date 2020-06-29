@@ -7,6 +7,9 @@ var cookieparser = require("cookie-parser");
 var expressSession = require("express-session");
 var expressErrorHandler = require("express-error-handler");
 
+//암호와 모듈
+var crypto = require("crypto");
+
 // mongodb 모듈 사용
 var mongoose = require("mongoose");
 var database;
@@ -25,15 +28,54 @@ function connectDB() {
     console.log("데이터베이스에 연결됨 : " + databaseUrl);
 
     UserSchema = mongoose.Schema({
-      id: { type: String, required: true, unique: true },
-      name: { type: String, index: "hashed" },
-      password: { type: String, required: true },
+      id: { type: String, required: true, unique: true, default: "" },
+      name: { type: String, index: "hashed", default: "" },
+      hashed_password: { type: String, required: true, default: "" },
+      salt: { type: String, required: true },
       age: { type: Number, default: -1 },
       created_at: { type: Date, index: { unique: false }, defalut: Date.now() },
       updated_at: { type: Date, index: { unique: false }, default: Date.now() },
     });
 
     console.log("UserSchema 정의함.");
+
+    UserSchema.virtual("password").set(function (password) {
+      this.salt = this.makeSalt();
+      this.hashed_password = this.encryptPassword(password);
+      console.log("virtural password 저장됨 : " + this.hashed_password);
+    });
+
+    UserSchema.method("encryptPassword", function (plainText, inSalt) {
+      if (inSalt) {
+        return crypto
+          .createHmac("sha1", inSalt)
+          .update(plainText)
+          .digest("hex");
+      } else {
+        return crypto
+          .createHmac("sha1", this.salt)
+          .update(plainText)
+          .digest("hex");
+      }
+    });
+
+    UserSchema.method("makeSalt", function () {
+      return Math.round(new Date().valueOf() * Math.random()) + "";
+    });
+
+    UserSchema.method("authenticate", function (
+      plainText,
+      inSalt,
+      hashed_password
+    ) {
+      if (inSalt) {
+        console.log("authenticate 호출됨.");
+        return this.encryptPassword(plainText, inSalt) === hashed_password;
+      } else {
+        console.log("authenticate 호출됨.");
+        return this.encryptPassword(plainText) === hashed_password;
+      }
+    });
 
     UserSchema.static("findById", function (id, callback) {
       return this.find({ id: id }, callback);
@@ -43,7 +85,7 @@ function connectDB() {
       return this.find({}, callback);
     });
 
-    UserModel = mongoose.model("users2", UserSchema);
+    UserModel = mongoose.model("users3", UserSchema);
     console.log("UserModel 정의함.");
   });
 
@@ -228,7 +270,13 @@ var authUser = function (db, id, password, callback) {
 
     console.log("아이디 %s로 검색한 결과");
     if (results.length > 0) {
-      if (results[0]._doc.password === password) {
+      var user = new UserModel({ id: id });
+      var authenticated = user.authenticate(
+        password,
+        results[0]._doc.salt,
+        results[0]._doc.hashed_password
+      );
+      if (authenticated) {
         console.log("비밀번호 일치함.");
         callback(null, results);
       } else {
